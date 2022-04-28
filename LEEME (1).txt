@@ -1,0 +1,278 @@
+Jose Luis Moreno Hernandez
+Manuel Fernando Valle Amortegui
+
+
+1) Generación del archivo indexado:
+
+
+Antes de proceder con el proceso de interfaz y búsqueda, vamos a indexar el archivo con los datos de forma binaria de manera que los registros con misma entrada en sourceid apunten al siguiente como un lista encadenada.
+
+Para genera dicho archivo, ejecutaremos el proceso indexar.
+
+Se define una estructura con identificador Register, dentro de la cual se declaran las variables que almacenarán la información de los campos: sourceid, dstid, hod, mean_travel_time, standard_deviation_travel_time, geometric_mean_travel_time y geometric_standard_deviation_travel_time; que es proporcionada por Uber-Movement en el
+archivo datos.csv. Adicionalmente se declara la variable next_source_id de tipo int en esta estructura, para ser usada en el proceso de generación de una lista encadenada.
+
+
+Al ejecutar este proceso, abrimos el archivo datos.csv:
+
+FILE *data = fopen("datos.csv","r");
+
+Luego, creamos otro archivo de texto, indexed.txt, en el que se escriben los datos encadenados de forma binaria:
+
+FILE *indexed = fopen("indexed.txt","wb");
+
+
+Seguido, declaramos las siguientes variables que nos permitiran leer el archivo datos.csv por líneas.
+
+char *line = NULL;
+size_t len=0;
+int cont=0;
+char delimiter[]=",";
+
+
+Declaramos el arreglo ids para almacenar la primera posición de cada id en la lista enlazada mediante memoria dinámica. Este arreglo tiene tamaño 1200, sufienciente para
+almacenar todas las posbles entradas de id de origen o de destino:
+
+
+#define ARR_SIZE 1200
+int *ids =(int*)calloc(ARR_SIZE,sizeof(int));
+
+Para que ningún registro quede guardado en la posición 0 de este arrglo vamos a mover el offset a la posicióń 1. Así dejaremos este este espacio exclusivamente la cola de la lista:
+
+fseek(indexed,1,0);
+
+
+
+En la estructra, regist, de tipo Register (declarado al inicio) se guardan los valores proveídos en datos.cvs por líneas, separados por comas (delimitador):
+
+while(getline(&line,&len,data)!=-1 && cont<10000000){
+		cont++;
+	
+		Register regist;
+		char *value = strtok(line,delimiter);regist.sourceid=atoi(value);
+		value=strtok(NULL,delimiter);regist.dstid=atoi(value);
+		value=strtok(NULL,delimiter);regist.hod=atoi(value);
+		value=strtok(NULL,delimiter);regist.mean_travel_time=atof(value);
+		value=strtok(NULL,delimiter);regist.standard_deviation_travel_time=atof(value);
+		value=strtok(NULL,delimiter);regist.geometric_mean_travel_time=atof(value);
+		value=strtok(NULL,delimiter);regist.geometric_standard_deviation_travel_time=atof(value); 		
+		
+		
+Es decir, tenemos structs que se visualizarán así:
+
+	regist = {sourceid,dstid,mean_travel_time,standard_deviation_travel_time,geometric_mean_travel_timegeometric_standard_deviation_travel_time} 
+
+
+/Se guarda la posición del registro anterior con el mismo id añadiendo nodos a la lista 
+
+Los registros generados por líneas cuya entrada correspondiente a sourceid coincida generarán un lista enlazada, de manera que se guarde la posición del registro anterior en la lista
+(generación de nodos):
+
+		...
+		
+		regist.next_source_id=*(ids+regist.sourceid);
+		
+	
+Así, se va guardando la posición en que queda guardado el registro en el arreglo ids:
+
+		*(ids+regist.sourceid)=(int)ftell(indexed);
+		
+Una vez culminada la iteración por líneas y se tenga el arreglo, se escribe este arreglo en el archivo indexed, creado anteriormente:
+
+		fwrite(&regist,sizeof(Register),1,indexed);
+
+Finalmente, cerramos el archivo y se guarda en un nuevo archivo tipo binario, aux.txt, para ser usado en el proceso de búsqueda:
+fclose(indexed);
+	FILE *aux=fopen("aux.txt","wb");
+	for(int i=0;i<ARR_SIZE;i++){
+		fwrite(&*(ids+i),sizeof(int),1,aux);
+	}
+	
+
+
+
+2) Establecimiento de comunicación entre el proceso de búsqueda y el proceso de intefaz de usuario: 
+
+
+Para iniciar el lanzamiento de los procesos, compilamos el código mediante el archivo Makefile. Se requiere haber obtenido el archivo indexado previo a la ejecución de estos procesos.
+
+Por la implementación de tuberías para la comunicación, se debe ejecutar siempre la interfaz primero, donde se crea la tubería pipe_search a través de la cual se envían los datos ingresados por el usuario al proceso de búsqueda. También se crea la tubería pipe_result en el proceso de búsqueda para enviar (escribir) el resultado obtenido de la tabla hash, la cual es abierta en la interfaz para lectura. Dado que se trata de dos procesos no emparentados, se crean la tuberías usando mkfifo() para lo cual se requiere que la tubería creada esté abierta desde el extremo de escritura (interfaz) y el extremo de lectura (búsqueda):
+
+
+
+
+	(En interfaz)						     (En búsqueda)
+
+	int pipe_search,pipe_result;                                    int pipe_search,pipe_result;
+	mkfifo("/tmp/pipe_search",0666);                                mkfifo("/tmp/pipe_result",0666);
+	
+Como argumentos de mkfifo() se tiene la ruta en la que se desea que esté el FIFO nombrado, "/tmp/pipe_search"; y los permisos para lectura y escritura en formato octal, 0666.
+
+En cada proceso se abren correspondientemente ambas tuberías usando la ruta definida y el modo de apertura (lectura o escritura) usando O_WRONLY o O_RDONLY:
+
+
+	(En interfaz)							(En búsqueda)	
+	pipe_search = open("/tmp/pipe_search",O_WRONLY);			pipe_search=open("/tmp/pipe_search",O_RDONLY);
+	pipe_result = open("/tmp/pipe_result",O_RDONLY);			pipe_result = open("/tmp/pipe_result",O_WRONLY);        
+	
+	   
+	   
+Con la tuberíás creadas y abiertas en ambos procesos, desde el proceso de interfaz se inicia un ciclo do-while en el que se ejecuta un switch case que permite elegir entre cinco opciones posibles, la cuales se muestran al usuario el siguente menú: 
+
+
+Bienvenido
+1. Ingresar origen
+2. Ingresar destino
+3. Ingresar hora
+4. Buscar tiempo de viaje medio
+5. Salir
+
+pidiendo que se ingrese un valor con el teclado (1-5) mediante la función scanf:
+
+scanf("%d",&option);
+
+El ciclo culmina si el usuario ingresa el valor numérico 5, de otra manera permanece esperando que el usuario ingrese una opción (1-4):
+
+
+int option,sourceid,dstid,hod;
+do {
+	...
+	switch(option) {
+		case 1:
+			...
+		case 2:
+			...
+		case 3:
+			...
+		case 4:
+			...
+		case 5:
+			...
+	}
+	...
+} while(option!=5);
+
+La opciones 1, 2 y 3, piden que se ingresen el id de origen (sourceid), el id de destino (dstid) y la hora del día (hod), respectivamente. Los valores ingresado se guardan en la variables declaradas justo antes del do-while:
+
+
+			case 1:
+				printf("Ingrese el id de origen: ");
+				scanf("%d",&sourceid);
+				printf("\n");
+				break;
+			case 2:
+				printf("Ingrese el id de destino: ");
+				scanf("%d",&dstid);
+				printf("\n");
+				break;
+			case 3:
+				printf("Ingrese la hora de viaje: ");
+				scanf("%d",&hod);
+				printf("\n");
+				break;
+
+
+De la opción 4 se imprime el tiempo medio de viaje (mean_travel_time), para el cálculo del cual se procede así:
+
+
+
+Los datos asociados a sourceid, dstid y hod, se escriben en la tubería pipe_search para ser leidos desde el proceso de búsqueda:
+
+	(En interfaz)						(En búsqueda)
+	write(pipe_search,&sourceid,sizeof(int)); 		read(pipe_search,&source_id,sizeof(int));
+	write(pipe_search,&dstid,sizeof(int));			read(pipe_search,&dstid,sizeof(int));
+	write(pipe_search,&hod,sizeof(int));			read(pipe_search,&hod,sizeof(int));
+	   
+
+Así, el proceso de búsqueda puede usar los datos ingresados para hacer hallar el valor de tiempo medio a través de la implementación de la tabla hash y el archivo indexado.
+Una vez obtenido el resultado de la búsqueda, se escribe en la tubería tal que el valor se subsecuentemente leído desde la interfaz y se muestre al usuario:
+	
+	(En búsqueda)									(En interfaz)
+	write(pipe_result,&prb.mean_travel_time,sizeof(float));				read(pipe_result,&result,sizeof(float));
+
+
+En el caso en que el valor no haya sido encontrado, se escribe -1, lo cual indica a la interfaz que imprima NA. De otra manera, el valor obtenido para el tiempo medio de viaje es
+impreso por la interfaz.
+
+
+
+Si el usuario, ingresa como opción 5 en la interfaz, se escribe en la tubería pipe_search, el valor -1, y se cierra el ciclo do-while interfaz con lo cual el proceso finaliza.
+			
+			(En interfaz)								(En búsqueda)
+			case 5:									read(pipe_search,&source_id,sizeof(int));
+				write(pipe_search,&end,sizeof(int));				if(source_id==-1){
+				printf("Adios, vuelva pronto.\n");					printf("No hay mas búsquedas \n");
+				break;									return 0; }
+
+
+Esto hace que al momento de lectura en el proceso de búsqueda el valor asociado a la variable source_id sea -1, lo cual lleva al ciclo while a terminación y, por tanto, se cierran
+ambos procesos exitosamente.
+
+	
+
+
+3) La búsqueda en la tabla hash:
+
+
+Se hace una implementación de una tabla hash mediante el código del archivo map.c. Cuando el proceso de búsqueda ha recibo las entradas del usuario, éstos han de ser usado para la
+búsqueda del tiempo medio de viaje en el archivo indexado.
+
+Primero, el source_id ingresado se copia como llave de búsqueda y inicializa un registro para guardar el resultado de dicha búsqueda.
+
+	sprintf(key,"%d",source_id);
+	Register prb;
+	
+Ya que los datos en el archivo indexado se escuentran almacenados en forma de lista encadenada, se usa source_id para localizar en tiempo constante  la cabeza de la lista, es decir, la primera entrada que corresponda al source_id ingresado; la posición de esta entrada se almacena en la variable res:
+		
+		uintptr_t res;
+		hashmap_get(m,key,sizeof(key)-1,&res);
+	
+Seguidamente se usa esta posición obtenida para llevar al apuntador a esa posición mediante la función fseek(), donde está la lista encadenada, la cual es leída mediante fread():
+
+		fseek(indexed,res,SEEK_SET);
+		fread(&prb,sizeof(Register),1,indexed);
+		
+Una vez leída la lista en prb, hacemos una búsqueda lineal a lo largo de ella para encontrar los datos proporcionados por el usuario. Si se encuentran dichos datos, la variable
+finded es actualizada con el valor 1, el cual se usará para determinar si se escribe -1 o el valor encontrado en tubería pipe_result, para que luego se imprima en la interfaz.
+
+		while(prb.next_source_id!=0){
+			//printf("%d %d %d %f\n ",prb.sourceid,prb.dstid,prb.hod,prb.mean_travel_time);
+			fseek(indexed,prb.next_source_id,SEEK_SET);
+			fread(&prb,sizeof(Register),1,indexed);
+			if(prb.sourceid==source_id && prb.dstid==dstid && prb.hod==hod){
+				finded=1;
+				break;
+			}
+		}
+		
+		if(finded==1){
+			write(pipe_result,&prb.mean_travel_time,sizeof(float));
+			printf("%d %d %d %f \n",prb.sourceid,prb.dstid,prb.hod,prb.mean_travel_time);
+			printf("Se encontró \n");
+		}else{
+			prb.mean_travel_time=-1;
+			write(pipe_result,&prb.mean_travel_time,sizeof(float));
+			printf("No se encontró \n");
+		}
+
+
+
+
+Para llevar control del tiempo empleado para llevar a cabo la búsqueda, se hace uso de la función clock() con variables inicializadas al comienzo y término del ciclo de búsqueda por la lista enlazada:		
+		
+		//Variables para medir el tiempo de la búsqueda
+		clock_t t_inicio,t_final;
+		double segundos;
+		t_inicio=clock();
+		
+		
+		... ejecución de búsqueda ...
+		
+		t_final=clock();
+		segundos = (double)(t_final-t_inicio)/CLOCKS_PER_SEC;
+		printf("\nBúsqueda realizada en: %f s\n",segundos);
+
+
+
+
+ 
